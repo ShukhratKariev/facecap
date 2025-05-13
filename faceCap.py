@@ -29,17 +29,9 @@ if __name__ == "__main__":
         print(json.dumps({"error": f"Failed to open video file: {video_path}"}))
         sys.exit(1)
 
-    # Face embedding and change detection settings
-    FACE_COMPARISON_TOLERANCE = 0.6
-    EMBEDDING_CHANGE_THRESHOLD = 0.15
-    frame_skip = 5
-
-    # Face tracking data
-    known_faces = []
-    face_id_counter = 0
+    frame_skip = 10  # Adjust as needed
     frame_count = 0
-
-    saved_faces = []
+    saved_faces_count = 0
 
     with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5) as face_detection:
         while cap.isOpened():
@@ -56,7 +48,7 @@ if __name__ == "__main__":
             results = face_detection.process(image_rgb)
 
             if results.detections:
-                for detection in results.detections:
+                for i, detection in enumerate(results.detections):
                     bbox = detection.location_data.relative_bounding_box
                     x = int(bbox.xmin * width)
                     y = int(bbox.ymin * height)
@@ -69,48 +61,12 @@ if __name__ == "__main__":
                     x2 = min(width, x + w + padding)
                     y2 = min(height, y + h + padding)
 
-                    face_crop_rgb = np.ascontiguousarray(image_rgb[y1:y2, x1:x2])
                     face_crop_bgr = frame[y1:y2, x1:x2]
-
-                    try:
-                        top, right, bottom, left = y1, x2, y2, x1
-                        face_locations = [(top, right, bottom, left)]
-                        face_encodings = face_recognition.face_encodings(face_crop_rgb, face_locations)
-
-                        if face_encodings:
-                            current_embedding = face_encodings[0]
-                            matched = False
-
-                            for face_data in known_faces:
-                                distance = np.linalg.norm(face_data["embedding"] - current_embedding)
-                                if distance < FACE_COMPARISON_TOLERANCE:
-                                    matched = True
-                                    change = np.linalg.norm(face_data["last_saved_embedding"] - current_embedding)
-                                    if change > EMBEDDING_CHANGE_THRESHOLD:
-                                        face_data["last_saved_embedding"] = current_embedding
-                                        face_data["embedding"] = current_embedding
-                                        filename = f"face_{face_data['id']}_frame{frame_count}.jpg"
-                                        filepath = os.path.join(output_folder, filename)
-                                        cv2.imwrite(filepath, face_crop_bgr)
-                                        saved_faces.append(filename)
-                                    break
-
-                            if not matched:
-                                face_id_counter += 1
-                                known_faces.append({
-                                    "id": face_id_counter,
-                                    "embedding": current_embedding,
-                                    "last_saved_embedding": current_embedding
-                                })
-                                filename = f"face_{face_id_counter}_frame{frame_count}.jpg"
-                                filepath = os.path.join(output_folder, filename)
-                                cv2.imwrite(filepath, face_crop_bgr)
-                                saved_faces.append(filename)
-
-                    except Exception as e:
-                        continue  # Skip face on error
+                    filename = f"face_{frame_count}_detection_{i}.jpg"
+                    filepath = os.path.join(output_folder, filename)
+                    cv2.imwrite(filepath, face_crop_bgr)
+                    saved_faces_count += 1
 
     cap.release()
 
-    # You can optionally output some summary info as JSON if needed
-    print(json.dumps({"status": "processing_done", "saved_faces_count": len(saved_faces)}))
+    print(json.dumps({"status": "processing_done", "saved_faces_count": saved_faces_count}))
