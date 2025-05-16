@@ -1,72 +1,65 @@
-import cv2
-import mediapipe as mp
-import os
 import sys
-import face_recognition
-import numpy as np
+import cv2
+import os
 import json
+import base64
+import numpy as np
 
-# Initialize mediapipe face detection
-mp_face_detection = mp.solutions.face_detection
-mp_drawing = mp.solutions.drawing_utils
+def image_sharpness(image):
+    return cv2.Laplacian(image, cv2.CV_64F).var()
 
-def script_directory():
-    """ Get the directory of the script """
-    return os.path.dirname(os.path.abspath(__file__))
+def encode_image(image):
+    _, buffer = cv2.imencode('.jpg', image)
+    return base64.b64encode(buffer).decode('utf-8')
 
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print(json.dumps({"error": "Error: Video path and output folder path must be provided as arguments."}))
-        sys.exit(1)
+if len(sys.argv) < 2:
+    print("No video file path provided", file=sys.stderr)
+    sys.exit(1)
 
-    video_path = sys.argv[1]
-    output_folder = sys.argv[2]
-    os.makedirs(output_folder, exist_ok=True)
+video_path = sys.argv[1]
+if not os.path.exists(video_path):
+    print(f"File not found: {video_path}", file=sys.stderr)
+    sys.exit(1)
 
-    cap = cv2.VideoCapture(video_path)
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+cap = cv2.VideoCapture(video_path)
 
-    if not cap.isOpened():
-        print(json.dumps({"error": f"Failed to open video file: {video_path}"}))
-        sys.exit(1)
+if not cap.isOpened():
+    print(f"Failed to open video file: {video_path}", file=sys.stderr)
+    sys.exit(1)
 
-    frame_skip = 10  # Adjust as needed
-    frame_count = 0
-    saved_faces_count = 0
+frame_skip = 5
+frame_idx = 0
+face_snapshots = []
 
-    with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5) as face_detection:
-        while cap.isOpened():
-            success, frame = cap.read()
-            if not success:
-                break
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-            frame_count += 1
-            if frame_count % frame_skip != 0:
-                continue
+    if frame_idx % frame_skip != 0:
+        frame_idx += 1
+        continue
 
-            height, width, _ = frame.shape
-            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = face_detection.process(image_rgb)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5)
 
-            if results.detections:
-                for i, detection in enumerate(results.detections):
-                    bbox = detection.location_data.relative_bounding_box
-                    x = int(bbox.xmin * width)
-                    y = int(bbox.ymin * height)
-                    w = int(bbox.width * width)
-                    h = int(bbox.height * height)
+    for (x, y, w, h) in faces:
+        face_img = frame[y:y+h, x:x+w]
+        sharpness = image_sharpness(face_img)
+        score = sharpness * w * h  # prioritize sharp and large faces
 
-                    padding = 20
-                    x1 = max(0, x - padding)
-                    y1 = max(0, y - padding)
-                    x2 = min(width, x + w + padding)
-                    y2 = min(height, y + h + padding)
+        face_snapshots.append({
+            "score": score,
+            "image_base64": encode_image(face_img)
+        })
 
-                    face_crop_bgr = frame[y1:y2, x1:x2]
-                    filename = f"face_{frame_count}_detection_{i}.jpg"
-                    filepath = os.path.join(output_folder, filename)
-                    cv2.imwrite(filepath, face_crop_bgr)
-                    saved_faces_count += 1
+    frame_idx += 1
 
-    cap.release()
+cap.release()
 
-    print(json.dumps({"status": "processing_done", "saved_faces_count": saved_faces_count}))
+# Sort by score and pick top N
+top_faces = sorted(face_snapshots, key=lambda x: x["score"], reverse=True)[:3]
+output = [f["image_base64"] for f in top_faces]
+
+print(json.dumps({"faces": output}))
