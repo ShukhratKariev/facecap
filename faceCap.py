@@ -12,6 +12,21 @@ def encode_image(image):
     _, buffer = cv2.imencode('.jpg', image)
     return base64.b64encode(buffer).decode('utf-8')
 
+def iou(boxA, boxB):
+    # Intersection over Union — basic box similarity
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[0] + boxA[2], boxB[0] + boxB[2])
+    yB = min(boxA[1] + boxA[3], boxB[1] + boxB[3])
+
+    interArea = max(0, xB - xA) * max(0, yB - yA)
+    if interArea == 0:
+        return 0.0
+
+    boxAArea = boxA[2] * boxA[3]
+    boxBArea = boxB[2] * boxB[3]
+    return interArea / float(boxAArea + boxBArea - interArea)
+
 if len(sys.argv) < 2:
     print("No video file path provided", file=sys.stderr)
     sys.exit(1)
@@ -30,7 +45,7 @@ if not cap.isOpened():
 
 frame_skip = 5
 frame_idx = 0
-face_snapshots = []
+face_clusters = []
 
 while True:
     ret, frame = cap.read()
@@ -42,24 +57,34 @@ while True:
         continue
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3)
 
     for (x, y, w, h) in faces:
         face_img = frame[y:y+h, x:x+w]
         sharpness = image_sharpness(face_img)
-        score = sharpness * w * h  # prioritize sharp and large faces
+        score = sharpness * w * h
 
-        face_snapshots.append({
-            "score": score,
-            "image_base64": encode_image(face_img)
-        })
+        matched = False
+        for cluster in face_clusters:
+            if iou(cluster["bbox"], (x, y, w, h)) > 0.4:
+                if score > cluster["score"]:
+                    cluster["score"] = score
+                    cluster["image_base64"] = encode_image(face_img)
+                    cluster["bbox"] = (x, y, w, h)
+                matched = True
+                break
+
+        if not matched:
+            face_clusters.append({
+                "bbox": (x, y, w, h),
+                "score": score,
+                "image_base64": encode_image(face_img)
+            })
 
     frame_idx += 1
 
 cap.release()
 
-# Sort by score and pick top N
-top_faces = sorted(face_snapshots, key=lambda x: x["score"], reverse=True)[:3]
-output = [f["image_base64"] for f in top_faces]
-
+# Return best face per cluster
+output = [cluster["image_base64"] for cluster in face_clusters]
 print(json.dumps({"faces": output}))
